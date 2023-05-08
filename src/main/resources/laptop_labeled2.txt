@@ -1,0 +1,2 @@
+数据源	文本序号	文本	Opinion 列表	Opinion：ACOS列表
+laptop_quad_train	504.0	i just got mine the other day , & am still getting used to it , but at the moment i couldn ' t be happier , it will do everything i want it to do , & i couldn ' t care less about the things it won ' t do .	22,26

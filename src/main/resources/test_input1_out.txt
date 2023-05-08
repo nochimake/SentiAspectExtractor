@@ -1,0 +1,1 @@
+[[{"aspect":[-1,-1],"opinion_index":0,"opinion":[1,2]}, {"aspect":[-1,-1],"opinion_index":1,"opinion":[4,5]}]]
