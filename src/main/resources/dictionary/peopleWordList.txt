@@ -55,8 +55,8 @@ niece
 nurse
 others
 parent
-people
-person
+#people
+#person
 policeman
 principal
 queen

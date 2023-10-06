@@ -1,4 +1,4 @@
-package extractor;
+package extractor.textParser;
 
 import java.util.ArrayList;
 
@@ -22,28 +22,20 @@ import edu.stanford.nlp.semgraph.SemanticGraphCoreAnnotations.CollapsedCCProcess
 import edu.stanford.nlp.trees.Tree;
 import edu.stanford.nlp.trees.TreeCoreAnnotations.TreeAnnotation;
 import edu.stanford.nlp.util.CoreMap;
+import extractor.AnalysisOptions;
 
-public class TextParser {
+public abstract class TextParser {
 	public AnalysisOptions OPT;
 	public void setOption(AnalysisOptions opt) {
 		this.OPT = opt;
 	}
+	public boolean isSpliterInit = false;
+	public StanfordCoreNLP spliter;
+	public abstract void spliterInit();
 	public boolean isParserInit = false;
 	public StanfordCoreNLP parser;
-	public void parserInit() {
-		if( !isParserInit ) {
-			Properties props = new Properties();
-			if( OPT.isUseCoreference ) {
-				props.setProperty("annotators","tokenize, ssplit, pos, lemma, parse, ner, dcoref");
-			}
-			else {
-				props.setProperty("annotators","tokenize, ssplit, pos, lemma, parse, ner");
-			}
-		    parser = new StanfordCoreNLP(props);
-		    isParserInit = true;
-		    System.out.println("初始化 TextParser !");
-		}
-	}
+	public abstract void parserInit();
+	
 	private boolean isTextInit = false;
 	private String text;
     private ArrayList<Integer> coreMapIndexs;
@@ -71,6 +63,8 @@ public class TextParser {
 	    		coreMapIndexs.add(graphList.size()-1);
 	    		int beginPosition = token.beginPosition();
 	    		beginPosTokenIndexMap.put(beginPosition, nodeList.size());
+	    		IndexedWord node = graph.getNodeByIndex(token.index());
+	    		node.setNER( token.ner() );
 	    		nodeList.add( graph.getNodeByIndex(token.index()) );
 	    	}
         }
@@ -101,6 +95,10 @@ public class TextParser {
 	    }
    	 	isTextInit = true;
     }
+    
+    public String getText() {
+		return text;
+	}
 
     public boolean isTextInit() {
 		return isTextInit;
@@ -206,8 +204,9 @@ public class TextParser {
     	return null;
     }
     
-    public String[] partitionSymbol = {",",":",".","HYPH"};
+    public abstract String[] getPartitionSymbol();
    	public boolean isPartitionSymbolByIndex(int index) {
+   		String[] partitionSymbol = getPartitionSymbol();
    		String tag = nodeList.get(index).tag();
    		for(int i=0;i<partitionSymbol.length;i++) {
 			if( tag.equals(partitionSymbol[i]) ) {

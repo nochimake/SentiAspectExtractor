@@ -37,6 +37,13 @@
     </dependency>   
     
     <dependency>
+        <groupId>edu.stanford.nlp</groupId>
+        <artifactId>stanford-corenlp</artifactId>
+        <version>4.5.1</version>
+        <classifier>models-chinese</classifier>
+    </dependency>
+    
+    <dependency>
     	<groupId>edu.stanford.nlp</groupId>
     	<artifactId>stanford-corenlp</artifactId>
         <version>4.5.1</version>
@@ -56,13 +63,19 @@
           <!-- 以下的这几种过滤规则最后取并集 -->
 		  <resource>
 		      <directory>src/main/resources</directory>
-			  <filtering>false</filtering>
+		      <filtering>false</filtering>
 			  <excludes>
 			      <exclude>**</exclude>
 			  </excludes>
 		  </resource>
 		  <resource>
-		      <directory>src/main/java/dictionaryCoverageSurvey</directory>
+            <directory>src/main/resources</directory>
+            <includes>
+                <include>StanfordCoreNLP-chinese.properties</include> <!-- 包含指定文件 -->
+            </includes>
+        </resource>
+		  <resource>
+		      <directory>src/main/java/dataAnalysis</directory>
 			  <filtering>false</filtering>
 			  <excludes>
 			      <exclude>**</exclude>

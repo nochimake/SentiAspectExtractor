@@ -1,10 +1,13 @@
-package extractor;
+package extractor.textParser;
 
 import java.util.ArrayList;
 
 import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.ling.IndexedWord;
 
+/**
+ * This class is used to manage reference resolution (Co-occurrence analysis)
+ */
 public class TextCorefChain {
 	private ArrayList< ArrayList<CoreLabel> > chain;
 	

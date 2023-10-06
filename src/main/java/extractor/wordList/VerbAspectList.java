@@ -1,4 +1,4 @@
-package extractor;
+package extractor.wordList;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 
 import edu.stanford.nlp.ling.IndexedWord;
+import extractor.FileIOs;
 
 public class VerbAspectList {
 	private HashSet<String[]>  VerbAspectSet;

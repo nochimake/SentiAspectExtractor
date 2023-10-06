@@ -11,6 +11,7 @@ import edu.stanford.nlp.ling.IndexedWord;
  * [3]: 最终通过主语关系找到 aspect ；
  * */
 public class Aspect {
+	private int[] oriIndexArr;
 	private boolean isImplicitAspect;
 	private String reasonForSelection;
 	private IndexedWord coreAspectNode;
@@ -64,6 +65,14 @@ public class Aspect {
 
 	public void setLeftMostBoundary(int leftMostBoundary) {
 		this.leftMostBoundary = leftMostBoundary;
+	}
+	
+	public int[] getOriIndexArr() {
+		return oriIndexArr;
+	}
+
+	public void setOriIndexArr(int[] oriIndexArr) {
+		this.oriIndexArr = oriIndexArr;
 	}
 	
 	public int[] getTokenIndexArr() {
@@ -148,6 +157,9 @@ public class Aspect {
     }
 	
 	public boolean isSubset(Aspect as2) {
+		if( isImplicitAspect && as2.isImplicitAspect) {
+			return true;
+		}
 		boolean hasNodeNotInAs2 = false;
 		for(int i=0;i<aspectNodeList.size();i++) {
 			IndexedWord myAspectNode = aspectNodeList.get(i);
@@ -156,11 +168,7 @@ public class Aspect {
 				break;
 			}
 		}
-		if( hasNodeNotInAs2 ) {
-			return false;
-		}else {
-			return true;
-		}
+		return !hasNodeNotInAs2;
 	}
 	
 	public int[] getAspectBeginPosScopeArr() {

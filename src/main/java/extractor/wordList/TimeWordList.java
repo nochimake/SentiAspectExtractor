@@ -1,9 +1,10 @@
-package extractor;
+package extractor.wordList;
 
 import java.util.HashSet;
 import java.util.List;
 
 import edu.stanford.nlp.ling.IndexedWord;
+import extractor.FileIOs;
 
 public class TimeWordList {
 	private HashSet<String> timeWordSet;

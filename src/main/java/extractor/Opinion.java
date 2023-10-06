@@ -5,21 +5,22 @@ import java.util.ArrayList;
 import edu.stanford.nlp.ling.IndexedWord;
 
 public class Opinion {
-	private boolean islegal;
+	private boolean isPotentialAspect;
+	private int[] oriIndexArr;
 	private IndexedWord coreOpinionNode;
 	private ArrayList<IndexedWord> opinionNodeList;
 	public Opinion(IndexedWord coreOpinionNode,ArrayList<IndexedWord> opinionNodeList) {
 		super();
-		this.islegal = false;
-		this.opinionNodeList = opinionNodeList;
 		this.coreOpinionNode = coreOpinionNode;
-		if( this.coreOpinionNode!=null ) {
-			this.islegal = true;
-		}
+		this.opinionNodeList = opinionNodeList;
 	}
 	
+	public Opinion() {
+	    this(null, null);
+	}
+
 	public boolean isLegal() {
-		return islegal;
+		return this.coreOpinionNode!=null;
 	}
 	
 	public IndexedWord getCoreOpinionNode() {
@@ -87,5 +88,28 @@ public class Opinion {
     	}
     	return false;
     }
+
+	public int[] getOriIndexArr() {
+		return oriIndexArr;
+	}
+
+	public void setOriIndexArr(int[] oriIndexArr) {
+		this.oriIndexArr = oriIndexArr;
+	}
+
+	public boolean isLegalOriIndexArr() {
+		if(this.oriIndexArr.length!=2 || this.oriIndexArr[0]<0 || this.oriIndexArr[1]<0 || this.oriIndexArr[0]>=this.oriIndexArr[1] ) {
+			return false;
+		}
+		return true;
+	}
+
+	public boolean isPotentialAspect() {
+		return isPotentialAspect;
+	}
+	
+	public void setIsPotentialAspect(boolean isPotentialAspect) {
+		this.isPotentialAspect = isPotentialAspect;
+	}
 	
 }

@@ -1,86 +1,160 @@
-package extractor;
+package extractor.textExtractor;
 
 import java.util.ArrayList;
-
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.tuple.Pair;
 
-import edu.stanford.nlp.io.EncodingPrintWriter.out;
 import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.ling.IndexedWord;
 import edu.stanford.nlp.semgraph.SemanticGraph;
 import edu.stanford.nlp.semgraph.SemanticGraphEdge;
-import edu.stanford.nlp.trees.GrammaticalRelation;
 import edu.stanford.nlp.trees.Tree;
+import extractor.AnalysisOptions;
+import extractor.Aspect;
+import extractor.Opinion;
+import extractor.coreNLPRules.CoreNLPRules;
+import extractor.textParser.TextParser;
+import extractor.wordList.ImplicitAspectWordList;
+import extractor.wordList.PeopleWordList;
+import extractor.wordList.TimeWordList;
+import extractor.wordList.VerbAspectList;
 
-public class TextExtractor {
+/**
+ * The main processes for extracting aspects are in this class
+ */
+public abstract class TextExtractor {
 	public AnalysisOptions OPT;
 	public TextParser textParser;
+	public CoreNLPRules NLPRule;
 	public PeopleWordList peopleWordList;
 	public TimeWordList timeWordList;
-	public VagueWordList vagueWordList;
 	public VerbAspectList verbAspectList;
-	private ImplicitAspectWordList implicitAspectWordList;
-	private CoreNLPRules NLPRule;
+	public ImplicitAspectWordList implicitAspectWordList;
+	
 	public void init() {
-		textParser = new TextParser();
 		textParser.setOption(OPT);
+		textParser.spliterInit();
 		textParser.parserInit();
 		peopleWordList = new PeopleWordList();
 		peopleWordList.initPeopleWordList(OPT.peopleWordListPath);
 		timeWordList = new TimeWordList();
 		timeWordList.initTimeWordList(OPT.timeWordListPath);
-		vagueWordList = new VagueWordList();
-		vagueWordList.initVagueWordList(OPT.vagueWordListPath);
 		verbAspectList = new VerbAspectList();
 		verbAspectList.initVerbAspectList(OPT.verbAspectWordListPath);
 		implicitAspectWordList = new ImplicitAspectWordList();
 		implicitAspectWordList.initImplicitAspectWordList(OPT.implicitAspectWordListPath);
-		NLPRule = new CoreNLPRules();
+		
 	}
 	
 	public void setOption(AnalysisOptions opt) {
 		this.OPT = opt;
 	}
 	
-	public void parseText(String text) {
-		textParser.initText(text);
+	private HashMap<Integer,List<Integer>> oriIndexTokenIndexMap;
+	private HashMap<Integer,List<Integer>> tokenIndexOriIndexMap;
+	
+	public abstract String preprocessInputText(String text,HashMap<Integer,List<Integer>> oriIndexTokenIndexMap,HashMap<Integer,List<Integer>> tokenIndexOriIndexMap);
+	
+	private int[] transInputIndexArrToTokenIndexArr(int[] inputIndexOPArr,HashMap<Integer,List<Integer>> oriIndexTokenIndexMap) {
+		int startOriIndex = inputIndexOPArr[0];
+		int endOriIndex = inputIndexOPArr[1]-1;
+		int[] tokenIndexOPArr = new int[2];
+		tokenIndexOPArr[0] = oriIndexTokenIndexMap.get(startOriIndex).get(0);
+		tokenIndexOPArr[1] = oriIndexTokenIndexMap.get(endOriIndex).get( oriIndexTokenIndexMap.get(endOriIndex).size()-1 );
+		return tokenIndexOPArr;
 	}
 	
-	public ArrayList<Aspect> extractForOpinion(int[] tokenIndexOPArr) {
+	private int[] transTokenIndexArrToOriIndexArr(int[] tokenIndexArr,HashMap<Integer,List<Integer>> tokenIndexOriIndexMap) {
+		int[] oriIndexOPArr = new int[2];
+		oriIndexOPArr[0] = -1;
+		oriIndexOPArr[1] = -1;
+		int startTokenIndex = tokenIndexArr[0];
+		int endTokenIndex = tokenIndexArr[1];
+		if( startTokenIndex!=-1 && endTokenIndex!=-1 ) {
+			oriIndexOPArr[0] = tokenIndexOriIndexMap.get(startTokenIndex).get(0);
+			oriIndexOPArr[1] = tokenIndexOriIndexMap.get(endTokenIndex).get( tokenIndexOriIndexMap.get(endTokenIndex).size()-1 )+1;
+		}
+		return oriIndexOPArr;
+	}
+	
+	public void parseText(String text) {
+		HashMap<Integer,List<Integer>> oriIndexTokenIndexMap = new HashMap<Integer,List<Integer>>();
+		HashMap<Integer,List<Integer>> tokenIndexOriIndexMap = new HashMap<Integer,List<Integer>>();
+		String text_preprocessed = preprocessInputText(text,oriIndexTokenIndexMap,tokenIndexOriIndexMap);
+		this.oriIndexTokenIndexMap = oriIndexTokenIndexMap;
+		this.tokenIndexOriIndexMap = tokenIndexOriIndexMap;
+		textParser.initText(text_preprocessed);
+	}	
+	
+	protected abstract IndexedWord selectCoreOpinionNode(ArrayList<IndexedWord> opinion);
+	
+	private void structureOpinion(Opinion op) {
+		int[] tokenIndex = transInputIndexArrToTokenIndexArr(op.getOriIndexArr(),this.oriIndexTokenIndexMap);
+		ArrayList<IndexedWord> opinionNodeList = new ArrayList<IndexedWord>();
+    	int startTokenIndex = tokenIndex[0];
+    	int endTokenIndex = tokenIndex[1];
+    	for(int i=startTokenIndex;i<=endTokenIndex;i++) {
+			IndexedWord opinionTermNode = textParser.getNodeByIndex(i);
+			opinionNodeList.add(opinionTermNode);
+		}
+    	IndexedWord coreOpinionNode = selectCoreOpinionNode(opinionNodeList);
+    	op.setCoreOpinionNode(coreOpinionNode);
+    	op.setOpinionNodeList(opinionNodeList);
+	}
+	
+	public ArrayList<Aspect> extractForOpinion(Opinion op) {
     	if( !textParser.isTextInit() ) {
     		System.err.println(" extractForOpinion() 之前需要初始化文本!");
     		return null;
     	}
     	ArrayList< Aspect > aspectList = new ArrayList< Aspect >();
-    	Opinion op = getOpinionFromIndexArr(tokenIndexOPArr);
+    	structureOpinion(op);
     	if( op.isLegal() ) {
-    		extractForGeneral(op,aspectList);
-    		//根据词性分类讨论
-    		String coreOpinionNodetag = op.getCoreOpinionNodeTag();
-    		if( NLPRule.isAdj(coreOpinionNodetag) ) {
-    			extractForAdjOpinion(op,aspectList);
+    		if( op.isPotentialAspect() ) {
+    			Aspect ap = new Aspect(op.getCoreOpinionNode(),"[R-0] SHAP Potential Aspect (SPA)");
+    			ap.setAspectNodeList( op.getOpinionNodeList() );
+    			extendAspectAndAddToList(op,ap,aspectList);
     		}
-        	else if( NLPRule.isVerb(coreOpinionNodetag) ) {
-        		extractForVerbOpinion(op,aspectList);
-        	}
-        	else if( NLPRule.isNoun(coreOpinionNodetag) ) {
-        		extractForNounOpinion(op,aspectList);
-        	}
-        	else if( NLPRule.isAdv(coreOpinionNodetag) ) {
-        		extractForAdvOpinion(op,aspectList);
-        	}
-        	else {
-        		extractForOtherOpinion(op,aspectList);
-        	}
+    		else {
+    			if( OPT.isUseGenRule) {
+    				extractForGeneral(op,aspectList);
+    			}
+    			//根据词性分类讨论
+        		String coreOpinionNodetag = op.getCoreOpinionNodeTag();
+        		if( NLPRule.isAdj(coreOpinionNodetag) ) {
+        			if( OPT.isUseAdjRule) {
+        				extractForAdjOpinion(op,aspectList);
+        			}
+        		}
+            	else if( NLPRule.isVerb(coreOpinionNodetag) ) {
+            		if( OPT.isUseVerbRule ) {
+            			extractForVerbOpinion(op,aspectList);
+            		}
+            	}
+            	else if( NLPRule.isNoun(coreOpinionNodetag) ) {
+            		if( OPT.isUseNounRule ) {
+            			extractForNounOpinion(op,aspectList);
+            		}
+            	}
+            	else if( NLPRule.isAdv(coreOpinionNodetag) ) {
+            		if( OPT.isUseAdvRule ) {
+            			extractForAdvOpinion(op,aspectList);
+            		}
+            	}
+            	else {
+            		extractForOtherOpinion(op,aspectList);
+            	}
+    		}
     	}
     	for(Aspect ap:aspectList) {
     		int[] tokenIndexArr = getTokenIndexForAspect(ap);
     		ap.setTokenIndexArr(tokenIndexArr);
+    		int[] inputIndexArr = transTokenIndexArrToOriIndexArr(tokenIndexArr,this.tokenIndexOriIndexMap);
+    		ap.setOriIndexArr(inputIndexArr);
     	}
 		return aspectList;
     }
@@ -93,75 +167,101 @@ public class TextExtractor {
 		return tokenIndexArr;
 	}
 	
-	private Opinion getOpinionFromIndexArr(int[] tokenIndexOPArr) {
-    	ArrayList<IndexedWord> opinionNodeList = new ArrayList<IndexedWord>();
-    	int startTokenIndex = tokenIndexOPArr[0];
-    	int endTokenIndex = tokenIndexOPArr[1];
-    	for(int i=startTokenIndex;i<=endTokenIndex;i++) {
-			IndexedWord opinionTermNode = textParser.getNodeByIndex(i);
-			opinionNodeList.add(opinionTermNode);
-		}
-    	IndexedWord coreOpinionNode = selectCoreOpinionNode(opinionNodeList);
-    	Opinion op = new Opinion(coreOpinionNode,opinionNodeList);
-    	return op;
+	protected void extractForGeneral(Opinion op,ArrayList<Aspect> aspectList) {
+		if( OPT.isUseSubjectRule ) {
+    		extractForGeneral_SubjectRule(op,aspectList);
+    	}
+    	if( OPT.isUsePredicativeRule ) {
+    		extractForGeneral_PredicativeRule(op,aspectList);
+    	}
+    	if( OPT.isUseSubordinateRule ) {
+    		extractForGeneral_SubordinateRule(op,aspectList);
+    	}
     }
 	
-	private Pattern pattern = Pattern.compile(".*?[a-zA-Z]+.*?");
-	private boolean isContainEng(String text) {
-		return pattern.matcher(text).matches();
+	protected void extractForGeneral_SubjectRule(Opinion op,ArrayList<Aspect> aspectList) {
+		IndexedWord coreNode = op.getCoreOpinionNode();
+    	SemanticGraph graph = textParser.getGraphByNode(coreNode);
+		//关于主语的探讨主语：
+    	Pair<IndexedWord,IndexedWord> subjGovPair = NLPRule.getNearestSubjGovPair(coreNode,graph);
+    	IndexedWord nearestSubj = subjGovPair.getLeft();
+    	IndexedWord nearestSubjGov = subjGovPair.getRight();
+    	//若存在主语
+    	if( nearestSubj!=null ) {
+    		//若主语为人
+    		if( peopleWordList.isPeopleNode(nearestSubj) ) {
+    			
+    		}
+    		//若主语为疑问词
+    		//e.g. "a {home pc laptop}-[ASPECT] that works very {well}-[OPINION] ."
+    		else if( nearestSubj.tag().equals("WDT") ) {
+    			if( nearestSubjGov!=null ) {
+    				int tokenIndex = textParser.getNodeIndexByNode(nearestSubj);
+    				IndexedWord prevOfWDT = textParser.getNodeByIndex(tokenIndex-1);
+    				if( prevOfWDT!=null && NLPRule.isNoun(prevOfWDT.tag()) ) {
+    					int rightmostBoundary = prevOfWDT.index();
+    					String reasonForSelection = "[R-8] opinion 位于 acl 中，取 acl 的修饰对象为 aspect (WH-Word)";
+        				Aspect ap = new Aspect(prevOfWDT,reasonForSelection);
+        				ap.setRightMostBoundary(rightmostBoundary);
+        				extendAspectAndAddToList(op,ap,aspectList);
+    				}
+    			}
+    		}
+    		//若主语为动词：
+    		else if( NLPRule.isVerb(nearestSubj.tag()) ) {
+    			Set<IndexedWord> objNodeSet = NLPRule.getImmediateObj(nearestSubj,graph);
+	  			if( objNodeSet.size()!=0 ) {
+	  			    //e.g. configuring the {printer}-[ASPECT] was a little tricky but {not bad}-[OPINION] .
+	  				String reasonForSelection = "[R-3] opinion 的主语为动词，且存在宾语，则取宾语";
+	  				Set<IndexedWord> setFiltered = filterObjNodeSet(graph,nearestSubj,objNodeSet);
+	  				for(IndexedWord objNode:setFiltered) {
+	  					Aspect ap = new Aspect(objNode,reasonForSelection);
+	  					extendAspectAndAddToList(op,ap,aspectList);
+	  				}
+	  			}
+	  			else {
+	  				//e.g. {set up}-[ASPECT] was {awesome}-[OPINION]
+	  				String reasonForSelection = "[R-4] opinion 的主语为动词，且不存在宾语，则取动词";
+  					Aspect ap = new Aspect(nearestSubj,reasonForSelection);
+    				extendAspectAndAddToList(op,ap,aspectList);
+	  			}	
+	    	}
+    		//若主语为形容词 
+    		// e.g. "most of my {android apps}-[ASPECT] have worked {well}-[OPINION] ."
+    		else if( NLPRule.isAdj(nearestSubj.tag()) ) {
+    			IndexedWord nmod = null;
+    			Set<IndexedWord> childSet = graph.getChildren(nearestSubj);
+    			for(IndexedWord child:childSet) {
+    				String reln = graph.getEdge(nearestSubj,child).getRelation().getShortName();
+    				if( reln.equals("nmod") ) {
+    					nmod = child;
+    				}
+    			}
+    			if( isLegalSubj(nmod) ) {
+    				String reasonForSelection = "[R-2] opinion 的主语为形容词，则取形容词的修饰对象";
+    				Aspect ap = new Aspect(nmod,reasonForSelection);
+    				extendAspectAndAddToList(op,ap,aspectList);
+    			}
+    		}
+    		// 名词主语
+    		// e.g. the {keyboard}-[ASPECT] is {stiff}-[OPINION]
+    		else if ( isLegalSubj(nearestSubj) ) {
+    			String reasonForSelection = "[R-1] opinion 的合法词性主语";
+    			Aspect ap = new Aspect(nearestSubj,reasonForSelection);
+				extendAspectAndAddToList(op,ap,aspectList);
+    		}
+    	}
 	}
-    
-    private IndexedWord selectCoreOpinionNode(ArrayList<IndexedWord> opinion) {
-    	if( opinion==null || opinion.size()==0 ) {
-    		return null;
-    	}
-    	int size = opinion.size();
-    	//opinion 只有一个单词
-    	if( size==1 ) {
-    		IndexedWord coreOpinionNode = opinion.get(0);
-    		return coreOpinionNode;
-    	}
-    	//opinion 含有多个单词
-    	else {
-    		//快捷选择：根据尾词的词性进行快捷选择
-    		IndexedWord endOpinionNode = opinion.get(size-1);
-    		if( NLPRule.isAdj(endOpinionNode.tag()) || NLPRule.isVerb(endOpinionNode.tag()) || NLPRule.isNoun(endOpinionNode.tag()) ) {
-    			return endOpinionNode;
-    		}
-    		//根据依赖关系进行选择
-    		int maxDegreeNum = -1;
-    		IndexedWord maxDegreeNode = null;
-    		for(int i=size-1;i>=0;i--) {
-    			IndexedWord opinionTermNode = opinion.get(i);
-    			String word = opinionTermNode.word().toLowerCase();
-    			int degree = 0;
-    			if( isContainEng(word) ) {
-    				SemanticGraph graph = textParser.getGraphByNode(opinionTermNode);
-    				int outDegree = graph.getChildren(opinionTermNode).size();
-    				int inDegree = graph.getParents(opinionTermNode).size();
-    				degree = inDegree+outDegree;
-    			}
-    			if( degree>maxDegreeNum ) {
-    				maxDegreeNum = degree;
-    				maxDegreeNode = opinionTermNode;
-    			}
-    		}
-    		if( maxDegreeNode==null ) {
-    			System.err.println(" coreOpinionNode 选择失败!");
-    		}
-    		return maxDegreeNode;
-    	}
-    }
-    
-    public void extractForGeneral(Opinion op,ArrayList<Aspect> aspectList) {
-    	IndexedWord coreNode = op.getCoreOpinionNode();
+	
+	protected void extractForGeneral_PredicativeRule(Opinion op,ArrayList<Aspect> aspectList) {
+		IndexedWord coreNode = op.getCoreOpinionNode();
     	SemanticGraph graph = textParser.getGraphByNode(coreNode);
     	//System.out.println("Dependency Graph:\n " +graph.toString(SemanticGraph.OutputFormat.READABLE));
     	ArrayList<IndexedWord> nodeList = textParser.getNodeList();
     	for(int i=0;i<nodeList.size();i++) {
     		IndexedWord node = nodeList.get(i);
     		//找到Be-Verb,处理 "主-系-表结构" 
-    		if( node.lemma().toLowerCase().equals("be") ) {
+    		if( NLPRule.isCopulaNode(node) ) {
     			if( !graph.containsVertex(node) ) {
     				continue;
     			} 
@@ -178,14 +278,14 @@ public class TextExtractor {
     	    			}
     	    		}
     	    		//opinion 位于"主-系-表"的主语中：取从句的主语为aspect:
-    	    		//e.g. "my only 【complaint】 is that the mouse keypad is a little big ."
-    	    		boolean isInSubjDescendants = isInDescendants(graph,subj,coreNode);
+    	    		//e.g. "my only {complaint}-[OPINION] is that the {mouse keypad}-[ASPECT] is a little big ."
+    	    		boolean isInSubjDescendants = NLPRule.isInDescendants(graph,subj,coreNode);
     	    		if( isInSubjDescendants && ccompOfVerb!=null ) {
     	    			IndexedWord clauseSubj = NLPRule.getImmediateSubj(ccompOfVerb,graph);
     	    			if( clauseSubj!=null && isLegalSubj(clauseSubj)) {
-    	    				String reasonForSelection = "[R-2] opinion 位于主语中，且表语为从句，则取表语从句主语为aspect";
+    	    				String reasonForSelection = "[R-5] opinion 位于主语中，且表语为从句，则取表语从句主语为aspect";
         					Aspect ap = new Aspect(clauseSubj,reasonForSelection);
-          	  	    		extendAspectAndAddToList(ap,op,aspectList);
+          	  	    		extendAspectAndAddToList(op,ap,aspectList);
     	    			}
     	    		}
     	    	}else {
@@ -194,30 +294,35 @@ public class TextExtractor {
     				if( reln.equals("cop") ) {
     					IndexedWord subj = NLPRule.getImmediateSubj(BEGov, graph);
         	    		//opinion 位于主-系-表，的主语中：取系语短语为aspect
-        	    		//e.g. "the only thing i think that could be 【better】 is the volume of the speakers ."
-        	    		//e.g. "- biggest 【disappointment】 is the track pad ."
-        	    		boolean isInDescendants = isInDescendants(graph,subj,coreNode);
+        	    		//e.g. "- biggest {disappointment}-[OPINION] is the {track pad}-[ASPECT] ."
+        	    		boolean isInDescendants = NLPRule.isInDescendants(graph,subj,coreNode);
         	    		if( isInDescendants && NLPRule.isNoun(BEGov.tag()) ) {
-        	    			String reasonForSelection = "[R-1] opinion 位于主语中，且表语为短语，则取短语为aspect";
+        	    			String reasonForSelection = "[R-6] opinion 位于主语中，且表语为短语，则取短语为aspect";
         	    			Aspect ap = new Aspect(BEGov,reasonForSelection);
-          	  	    		extendAspectAndAddToList(ap,op,aspectList);
+          	  	    		extendAspectAndAddToList(op,ap,aspectList);
         	    		}
     				}
     			}
     		}
     	}
-    	
+	}
+	
+	protected void extractForGeneral_SubordinateRule(Opinion op,ArrayList<Aspect> aspectList) {
+		IndexedWord coreNode = op.getCoreOpinionNode();
+    	SemanticGraph graph = textParser.getGraphByNode(coreNode);
+    	ArrayList<IndexedWord> nodeList = textParser.getNodeList();
     	//关于以从句修饰的探索：
-    	//case 1:修饰从句以括号与主体连接，e.g."- backlit and solid keyboard ( 【not flimsy or cheap】 )"
+    	//case 1:修饰从句以括号与主体连接
+    	//e.g." backlit and solid {keyboard}-[ASPECT] ( {not flimsy or cheap}-[OPINION] )"
     	IndexedWord nodeLeadBracket = null;
     	IndexedWord startOPNode = op.getOpinionStartNode();
     	int startOPNodeIndex = textParser.getNodeIndexByNode(startOPNode);
     	for(int i=startOPNodeIndex-1;i>0;i--) {
     		IndexedWord node = nodeList.get(i);
-    		if( node.word().equals(")") ) {
+    		if( NLPRule.isRightParenthesis(node.word()) ) {
     			break;
     		}
-    		else if(  node.word().equals("(") ) {
+    		else if(  NLPRule.isLeftParenthesis(node.word()) ) {
     			nodeLeadBracket = nodeList.get(i-1);
     		}
     	}
@@ -226,7 +331,7 @@ public class TextExtractor {
     		String reasonForSelection = "[R-7] opinion 位于括号中，取括号前一个单词为aspect";
     		Aspect ap = new Aspect(nodeLeadBracket,reasonForSelection);
     		ap.setRightMostBoundary(rightmostBoundary);
-	    	extendAspectAndAddToList(ap,op,aspectList);
+	    	extendAspectAndAddToList(op,ap,aspectList);
     	}
     	//case 2: 通过"acl"关系查找从句：
     	for (SemanticGraphEdge edge : graph.edgeIterable()) {
@@ -234,20 +339,22 @@ public class TextExtractor {
     		if( reln.startsWith("acl") ) {
     			IndexedWord gov = edge.getGovernor();
     			IndexedWord dep = edge.getDependent();
-    			boolean isInACL = isInACL(graph,dep,coreNode);
+    			boolean isInACL = NLPRule.isInACL(graph,dep,coreNode);
     			if( isInACL && isLegalByTag(gov) ) {
     				if( peopleWordList.isPeopleNode(gov) ) {
     					continue;
     				}else {
     					IndexedWord clauseModObj = gov;
-    					// 取acl的修饰对象为aspect    e.g. "a home pc laptop that works very well ."
+    					// 取acl的修饰对象为aspect    
+    					// e.g. "a {home pc laptop}-[ASPECT] that works very {well}-[OPINION] ."
     					int rightmostBoundary = clauseModObj.index();
         				String reasonForSelection = "[R-8] opinion 位于 acl 中，取 acl 的修饰对象为aspect";
         				Aspect ap = new Aspect(clauseModObj,reasonForSelection);
         				ap.setRightMostBoundary(rightmostBoundary);
-        				extendAspectAndAddToList(ap,op,aspectList);
+        				extendAspectAndAddToList(op,ap,aspectList);
         				
-        				// 若acl的修饰对象为主系表中的表语，则再取主语为aspect	e.g. "the ports were another thing that i was really excited to see "
+        				// 若acl的修饰对象为主系表中的表语，则再取主语为aspect	
+        				// e.g. "the {ports}-[ASPECT] were another thing that i was really {excited}-[OPINION] to see "
         				IndexedWord subj = NLPRule.getImmediateSubj(clauseModObj,graph);
         				IndexedWord cop = null;
         				Set<IndexedWord> childOfClauseModObj = graph.getChildren(clauseModObj);
@@ -260,118 +367,20 @@ public class TextExtractor {
         				if( cop!=null && subj!=null ) {
         					reasonForSelection = "[R-9] opinion 位于 acl 中，且 acl 的修饰对象为表语，则取主语为aspect";
             				Aspect subjAp = new Aspect(subj,reasonForSelection);
-            				extendAspectAndAddToList(subjAp,op,aspectList);
+            				extendAspectAndAddToList(op,subjAp,aspectList);
         				}
-        				
-    				}
+        			}
     			}
     		}
     	}
-    	
-    	//关于主语的探讨主语：
-    	Pair<IndexedWord,IndexedWord> subjGovPair = NLPRule.getNearestSubjGovPair(coreNode,graph);
-    	IndexedWord nearestSubj = subjGovPair.getLeft();
-    	IndexedWord nearestSubjGov = subjGovPair.getRight();
-    	//若存在主语
-    	if( nearestSubj!=null ) {
-    		//若主语为人
-    		if( peopleWordList.isPeopleNode(nearestSubj) ) {
-    			
-    		}
-    		//若主语为疑问词, e.g. "just a home pc laptop that works very well ."
-    		else if( nearestSubj.tag().equals("WDT") ) {
-    			if( nearestSubjGov!=null ) {
-    				int tokenIndex = textParser.getNodeIndexByNode(nearestSubj);
-    				IndexedWord prevOfWDT = textParser.getNodeByIndex(tokenIndex-1);
-    				if( prevOfWDT!=null && NLPRule.isNoun(prevOfWDT.tag()) ) {
-    					int rightmostBoundary = prevOfWDT.index();
-    					String reasonForSelection = "[R-8] opinion 位于 acl 中，取 acl 的修饰对象为 aspect (WH-Word)";
-        				Aspect ap = new Aspect(prevOfWDT,reasonForSelection);
-        				ap.setRightMostBoundary(rightmostBoundary);
-        				extendAspectAndAddToList(ap,op,aspectList);
-    				}
-    			}
-    		}
-    		//若主语为动词：
-    		else if( NLPRule.isVerb(nearestSubj.tag()) ) {
-	    		Set<IndexedWord> objNodeSet = NLPRule.getImmediateObj(nearestSubj,graph);
-	  			if( objNodeSet.size()!=0 ) {
-	  				String reasonForSelection = "[R-5] opinion 的主语为动词，且存在宾语，则取宾语";
-	  				Set<IndexedWord> setFiltered = filterObjNodeSet(graph,nearestSubj,objNodeSet);
-	  				for(IndexedWord objNode:setFiltered) {
-	  					Aspect ap = new Aspect(objNode,reasonForSelection);
-	  					extendAspectAndAddToList(ap,op,aspectList);
-	  				}
-	  			}
-	  			else {
-	  				String reasonForSelection = "[R-6] opinion 的主语为动词，且不存在宾语，则取动词";
-  					Aspect ap = new Aspect(nearestSubj,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
-	  			}	
-	    	}
-    		//若主语为形容词 e.g. "most of my android apps have worked 【well】 ."
-    		else if( NLPRule.isAdj(nearestSubj.tag()) ) {
-    			IndexedWord nmod = null;
-    			Set<IndexedWord> childSet = graph.getChildren(nearestSubj);
-    			for(IndexedWord child:childSet) {
-    				String reln = graph.getEdge(nearestSubj,child).getRelation().getShortName();
-    				if( reln.equals("nmod") ) {
-    					nmod = child;
-    				}
-    			}
-    			if( isLegalSubj(nmod) ) {
-    				String reasonForSelection = "[R-4] opinion 的主语为形容词，则取形容词的修饰对象";
-    				Aspect ap = new Aspect(nmod,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
-    			}
-    		}
-    		// 名词主语
-    		else if ( isLegalSubj(nearestSubj) ) {
-    			String reasonForSelection = "[R-3] opinion 的合法词性主语";
-    			Aspect ap = new Aspect(nearestSubj,reasonForSelection);
-				extendAspectAndAddToList(ap,op,aspectList);
-    		}
-    	}
-    }
-    
-    private boolean isInDescendants(SemanticGraph graph,IndexedWord gov,IndexedWord dep) {
-    	if( gov==null ) {
-    		return false;
-    	}
-    	// 若 gov 和 dep 为一个节点，会返回这个节点本身：
-    	List<IndexedWord> nodeInPath = graph.getShortestDirectedPathNodes(gov,dep);
-    	if( nodeInPath==null || nodeInPath.size()==0 ) {
-    		return false;
-    	}
-    	return true;
-    }
-    
-    private boolean isInACL(SemanticGraph graph,IndexedWord gov,IndexedWord dep) {
-    	if( gov==null ) {
-    		return false;
-    	}
-    	// 若 gov 和 dep 为一个节点，会返回这个节点本身：
-    	List<IndexedWord> nodeInPath = graph.getShortestDirectedPathNodes(gov,dep);
-    	if( nodeInPath==null || nodeInPath.size()==0 ) {
-    		return false;
-    	}
-    	for(int i=0;i<nodeInPath.size()-1;i++) {
-    		IndexedWord govv = nodeInPath.get(i);
-    		IndexedWord depp = nodeInPath.get(i+1);
-    		String reln = graph.getEdge(govv, depp).getRelation().toString();
-    		if( reln.startsWith("acl") ) {
-    			return false;
-    		}
-    	}
-    	return true;
-    }
-    
-    public void extractForAdjOpinion(Opinion op,ArrayList<Aspect> aspectList) {
+	}
+	
+	protected void extractForAdjOpinion(Opinion op,ArrayList<Aspect> aspectList) {
     	IndexedWord adj = op.getCoreOpinionNode();
     	SemanticGraph graph = textParser.getGraphByNode(adj);
     	//System.out.println("Dependency Graph:\n " +graph.toString(SemanticGraph.OutputFormat.READABLE));
     	
-    	//寻找 adj 的修饰对象：
+    	//探讨修饰对象：
     	//case 1: 向祖先节点寻找
     	boolean hasFindStandardModObject = false;
     	Set<IndexedWord> modObjectSet = new HashSet<IndexedWord>();
@@ -388,15 +397,17 @@ public class TextExtractor {
     		for(IndexedWord modObject:modObjectSet) {
     			if( NLPRule.isNoun(modObject.tag()) ) {
     				hasFindStandardModObject = true;
-    				// 直接修饰对象，e.g. "a great computer"
+    				// 直接修饰对象:
+    				// e.g. "a {great}-[OPINION] {computer}-[ASPECT]"
     				boolean isInFaultLoca = modObject.index()<adj.index() && textParser.havePartitionInBetween(modObject, adj);
     				boolean isInReasonableLoca = !OPT.isSuppByLocaDistribution || !isInFaultLoca;
     				if( isInReasonableLoca ) {
     					String reasonForSelection = "[R-10] adj_opinion 的修饰对象(直接修饰对象)";
             			Aspect ap = new Aspect(modObject,reasonForSelection,0);
-            			extendAspectAndAddToList(ap,op,aspectList);
+            			extendAspectAndAddToList(op,ap,aspectList);
     				}
-    				// 直接修饰对象的所属名词，e.g. "a laptop at a reasonable price"
+    				// 直接修饰对象的所属名词:
+    				// e.g. "a {laptop}-[ASPECT] at a {reasonable}-[OPINION] price"
     				IndexedWord mainNoun = null;
     				Set<IndexedWord> modObjGovSet = graph.getParents(modObject);
     				for(IndexedWord modObjGov:modObjGovSet) {
@@ -407,44 +418,49 @@ public class TextExtractor {
     					}
     				}
     				if( mainNoun!=null && NLPRule.isNoun(mainNoun) ) {
-    					String reasonForSelection = "[R-11] adj_opinion 的修饰对象(直接修饰对象的所属名词)";
+    					String reasonForSelection = "[R-11] adj_opinion 直接修饰对象的所属名词";
             			Aspect ap = new Aspect(mainNoun,reasonForSelection,0);
-            			extendAspectAndAddToList(ap,op,aspectList);
+            			extendAspectAndAddToList(op,ap,aspectList);
     				}
     			}
-    			else if( NLPRule.isAdj(modObject.tag()) ) {
+    			// 间接修饰对象:
+				// e.g. "{nice}-[OPINION] sized {keyboard}-[ASPECT] "
+    			else if( NLPRule.isAdj(modObject) ) {
     				Set<IndexedWord> govOfModObject = graph.getParents(modObject);
     				for(IndexedWord govOfMod:govOfModObject) {
     					String reln = graph.getEdge(govOfMod,modObject).getRelation().toString();
     					boolean reasonableLocaDistribution = govOfMod.index()>adj.index();
     					boolean isInReasonableLoca = !OPT.isSuppByLocaDistribution || reasonableLocaDistribution;
-    					if( NLPRule.isModReln(reln) && NLPRule.isNoun(govOfMod.tag()) && isInReasonableLoca ) {
+    					if( NLPRule.isModReln(reln) && NLPRule.isNoun(govOfMod) && isInReasonableLoca ) {
     						hasFindStandardModObject = true;
-    	    				String reasonForSelection = "[R-12] adj_opinion 的修饰对象(间接修饰对象)";
+    	    				String reasonForSelection = "[R-12] adj_opinion 的间接修饰对象";
     	        			Aspect ap = new Aspect(govOfMod,reasonForSelection,0);
     	        			if( govOfMod.index()>modObject.index() && govOfMod.index()>adj.index() ) {
     							int leftMostBoundary = modObject.index()+1;
     							ap.setLeftMostBoundary(leftMostBoundary);
     						}
-    	        			extendAspectAndAddToList(ap,op,aspectList);
+    	        			extendAspectAndAddToList(op,ap,aspectList);
     	    			}
     				}
     			}
     		}
     	}
     	//case 2: 隐性修饰对象, 向后一个单位寻找
+    	// e.g. terrible product and {worse}-[OPINION] {customer service}-[ASPECT] - - do not buy
     	if( !hasFindStandardModObject ) {
 			int beginPos = adj.beginPosition();
 			int tokenIndex = textParser.getNodeIndexByBeginPos(beginPos);
 			IndexedWord nextNode = textParser.getNodeByIndex(tokenIndex+1);
 			String reasonForSelection = "[R-10] adj_opinion 的修饰对象(隐性修饰对象)";
-			if( nextNode!=null && NLPRule.isNoun(nextNode.tag())) {
+			if( nextNode!=null && NLPRule.isNoun(nextNode)) {
 				Aspect ap = new Aspect(nextNode,reasonForSelection,0);
-				extendAspectAndAddToList(ap,op,aspectList);
+				extendAspectAndAddToList(op,ap,aspectList);
 			}
         }
     	
-    	//根据使役结构寻找宾语：e.g. "it will take years of bad programming to make this chromebook as 【slow】 as my last one got ."
+    	//宾语部分：
+    	//case 1:根据使役结构寻找宾语：
+    	// e.g. "it will take years of bad programming to make this {chromebook}-[ASPECT] as {slow}-[OPINION] as my last one got ."
     	Set<IndexedWord> advclGovSet = graph.getParentsWithReln(adj, "advcl");
     	for(IndexedWord gov:advclGovSet) {
     		if( NLPRule.isVerbCollocateWthAdvcl(gov) ) {
@@ -453,23 +469,37 @@ public class TextExtractor {
     			String reasonForSelection = "[R-13] adj_opinion 的宾语(通过使役结构取得)";
     			for(IndexedWord objNode:setFiltered) {
     				Aspect ap = new Aspect(objNode,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
+    				extendAspectAndAddToList(op,ap,aspectList);
     			}
     		}
     	}
+    	//case 2:直接寻找宾语：
+    	//e.g."i'm super {happy}-[OPINION] with this {product}-[ASPECT] ."
+    	IndexedWord nearestSubj = NLPRule.getNearestSubj(adj,graph);
+    	if( nearestSubj==null || peopleWordList.isPeopleNode(nearestSubj) ) {
+    		Set<IndexedWord> objNodeSet = NLPRule.getImmediateObj(adj,graph);
+    		Set<IndexedWord> setFiltered = filterObjNodeSet(graph,adj,objNodeSet);
+    		for(IndexedWord objNode:setFiltered) {
+				String reasonForSelection = "[R-14] adj_opinion 的宾语(直接)";
+				Aspect ap = new Aspect(objNode,reasonForSelection);
+				extendAspectAndAddToList(op,ap,aspectList);
+			}
+    	}
     	
-    	//讨论补语(一)：
+    	//讨论补语：
     	Set<IndexedWord> ccompNodeSet = new HashSet<IndexedWord>();
     	Set<IndexedWord> advclNodeSet = new HashSet<IndexedWord>();
     	Set<IndexedWord> xcompVerbSet = new HashSet<IndexedWord>();
 		Set<IndexedWord> childSet = graph.getChildren(adj);
 		for(IndexedWord child:childSet) {
 			String reln = graph.getEdge(adj,child).getRelation().toString();
+			//case 1:提取补语动词
+			// e.g. very {easy}-[OPINION] to {set up}-[ASPECT] .
 			if( reln.equals("xcomp") && NLPRule.isVerb(child.tag()) ) {
 				xcompVerbSet.add(child);
 				String reasonForSelection = "[R-15] adj_opinion 提取补语动词";
 				Aspect ap = new Aspect(child,reasonForSelection);
-	  			extendAspectAndAddToList(ap,op,aspectList);
+	  			extendAspectAndAddToList(op,ap,aspectList);
 			}
 			else if( reln.equals("advcl") ) {
 				advclNodeSet.add(child);
@@ -479,30 +509,35 @@ public class TextExtractor {
 			}
 		}
 		
-		//曾经讨论过的主语类别 nearestSubj.tag().indexOf("PRP")!=-1 || nearestSubj.tag().indexOf("DT")!=-1 
-    	IndexedWord nearestSubj = NLPRule.getNearestSubj(adj,graph);
-    	if( nearestSubj==null || peopleWordList.isPeopleNode(nearestSubj) ) {
-    		//讨论宾语：e.g."i'm super happy with this product ."
-    		//此处尝试着讨论过并列词的宾语，但效果不好
-    		Set<IndexedWord> objNodeSet = NLPRule.getImmediateObj(adj,graph);
-    		Set<IndexedWord> setFiltered = filterObjNodeSet(graph,adj,objNodeSet);
-    		for(IndexedWord objNode:setFiltered) {
-				String reasonForSelection = "[R-14] adj_opinion 的宾语(直接)";
-				Aspect ap = new Aspect(objNode,reasonForSelection);
-				extendAspectAndAddToList(ap,op,aspectList);
-			}
-    		//讨论补语(二)：
+		if( nearestSubj==null || peopleWordList.isPeopleNode(nearestSubj) ) {
+			//case 2:提取补语从句的主语
+    		//e.g.  i'm so {disappointed}-[OPINION] that {it}-[ASPECT] turned out like this 
+    		if( advclNodeSet.size()!=0 || ccompNodeSet.size()!=0) {
+    			Set<IndexedWord> clauseNodeSet = new HashSet<IndexedWord>();
+    			clauseNodeSet.addAll(advclNodeSet);
+    			clauseNodeSet.addAll(ccompNodeSet);
+    			for(IndexedWord clauseNode:clauseNodeSet) {
+    				IndexedWord clauseSubj = NLPRule.getImmediateSubj(clauseNode,graph);
+    				if( isLegalSubj(clauseSubj) ) {
+	    				String reasonForSelection = "[R-16] adj_opinion 提取从句主语";
+	    	    		Aspect ap = new Aspect(clauseSubj,reasonForSelection);
+	    				extendAspectAndAddToList(op,ap,aspectList);
+	    			}	
+    			}
+    		}
     		if( xcompVerbSet.size()!=0 ) {
   				for(IndexedWord xcompVerb:xcompVerbSet) {
-  					//讨论补语动词的宾语 e.g. "i was extremely hesitant to buy a used macbook pro"
+  					//case 3:讨论补语动词的宾语 
+  					// e.g. "i was extremely {hesitant}-[OPINION] to buy a used {macbook pro}-[ASPECT]"
   					Set<IndexedWord> xcompVerbObjNodeSet = NLPRule.getImmediateObj(xcompVerb,graph);
   					Set<IndexedWord> xcompVerbObjSetFiltered = filterObjNodeSet(graph,xcompVerb,xcompVerbObjNodeSet);
   					for(IndexedWord objNode:xcompVerbObjSetFiltered) {
   						String reasonForSelection = "[R-17] adj_opinion 提取补语动词的宾语";
   						Aspect ap = new Aspect(objNode,reasonForSelection);
-  	    				extendAspectAndAddToList(ap,op,aspectList);
+  	    				extendAspectAndAddToList(op,ap,aspectList);
   					}	
-  				    //讨论补语动词的从句 e.g. "i'm happy to report that the keyboard is great."
+  				    //case 4:讨论补语动词的从句主语
+  					// e.g. "i'm {happy}-[OPINION] to report that the {keyboard}-[ASPECT] is great."
   		    		IndexedWord xcompVerb_ccomp = null;
   		    		Set<IndexedWord> xcompVerbChildSet = graph.getChildren(xcompVerb);
   		    		for(IndexedWord child:xcompVerbChildSet) {
@@ -516,60 +551,49 @@ public class TextExtractor {
   		    			if( isLegalSubj(ccompSubj) ) {
   		    				String reasonForSelection = "[R-18] adj_opinion 提取补语动词的从句主语";
   		    	    		Aspect ap = new Aspect(ccompSubj,reasonForSelection);
-  		    				extendAspectAndAddToList(ap,op,aspectList);
+  		    				extendAspectAndAddToList(op,ap,aspectList);
   		    			}
   		    		}
   				}
   			}
-    		//讨论补语(三)：
-    		if( advclNodeSet.size()!=0 || ccompNodeSet.size()!=0) {
-    			Set<IndexedWord> clauseNodeSet = new HashSet<IndexedWord>();
-    			clauseNodeSet.addAll(advclNodeSet);
-    			clauseNodeSet.addAll(ccompNodeSet);
-    			for(IndexedWord clauseNode:clauseNodeSet) {
-    				IndexedWord clauseSubj = NLPRule.getImmediateSubj(clauseNode,graph);
-    				if( isLegalSubj(clauseSubj) ) {
-	    				String reasonForSelection = "[R-16] adj_opinion 提取从句主语";
-	    	    		Aspect ap = new Aspect(clauseSubj,reasonForSelection);
-	    				extendAspectAndAddToList(ap,op,aspectList);
-	    			}	
-    			}
-    		}
     	}
-    	
     }
-    
-    public void extractForVerbOpinion(Opinion op,ArrayList<Aspect> aspectList) {
+	
+	protected void extractForVerbOpinion(Opinion op,ArrayList<Aspect> aspectList) {
     	IndexedWord verb = op.getCoreOpinionNode();
     	SemanticGraph graph = textParser.getGraphByNode(verb);
     	String reasonForSelection;
 		//System.out.println("Dependency Graph:\n " +graph.toString(SemanticGraph.OutputFormat.READABLE));
     	
+    	//讨论修饰对象:
     	//提取verb的修饰对象
+    	// e.g.  a {non - functioning}-[OPINION] {touchpad}-[ASPECT]
 		Set<IndexedWord> govSet = graph.getParents(verb);
     	if( govSet!=null && govSet.size()!=0 ) {
     		for(IndexedWord gov:govSet) {
     			String reln = graph.getEdge(gov,verb).getRelation().toString();
-    			if( NLPRule.isModReln(reln) && NLPRule.isNoun(gov.tag()) ) {
+    			if( NLPRule.isModReln(reln) && NLPRule.isNoun(gov) ) {
     				reasonForSelection = "[R-19] verb_opinion 的修饰对象(直接修饰对象)";
     				Aspect ap = new Aspect(gov,reasonForSelection,0);
-    				extendAspectAndAddToList(ap,op,aspectList);
+    				extendAspectAndAddToList(op,ap,aspectList);
     			}
         	}
     	}
     	
-    	//讨论宾语：
+    	//讨论宾语:
     	IndexedWord nearestSubj = NLPRule.getNearestSubj(verb,graph);
     	if( nearestSubj==null || peopleWordList.isPeopleNode(nearestSubj) ) {
-    		//提取宾语(1) 显性的宾语
+    		//case 1: 显性的宾语 
+    		// e.g  i will {recommend}-[OPINION] this {ssd}-[ASPECT]
     		Set<IndexedWord> objNodeSet = NLPRule.getImmediateObj(verb,graph);
         	Set<IndexedWord> setFiltered = filterObjNodeSet(graph,verb,objNodeSet);
 			for(IndexedWord objNode:setFiltered) {
 				reasonForSelection = "[R-20] verb_opinion 的宾语(显性)";
 				Aspect ap = new Aspect(objNode,reasonForSelection);
-				extendAspectAndAddToList(ap,op,aspectList);
+				extendAspectAndAddToList(op,ap,aspectList);
 			}	
-    		//提取宾语(2) 隐性的宾语
+    		//case 2: 隐性的宾语
+			// e.g   i {like}-[OPINION] the {laptop}-[ASPECT] feel and look to it .
     		int beginPos = verb.beginPosition();
     		int tokenIndex = textParser.getNodeIndexByBeginPos(beginPos);
     		IndexedWord nextNode = textParser.getNodeByIndex(tokenIndex+1);
@@ -577,7 +601,7 @@ public class TextExtractor {
     		if( nextNode!=null ) {
     			if( NLPRule.isNoun(nextNode.tag()) ) {
     				Aspect ap = new Aspect(nextNode,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
+    				extendAspectAndAddToList(op,ap,aspectList);
     			}
     			else if( nextNode.tag().equals("DT") ) {
     				IndexedWord referentialObject = null;
@@ -586,21 +610,23 @@ public class TextExtractor {
     				if( reln.equals("det") ) {
     					referentialObject = gov;
     				}
-    				if( referentialObject!=null && NLPRule.isNoun(referentialObject.tag()) ) {
+    				if( referentialObject!=null && NLPRule.isNoun(referentialObject) ) {
     					Aspect ap = new Aspect(referentialObject,reasonForSelection);
-    					extendAspectAndAddToList(ap,op,aspectList);
+    					extendAspectAndAddToList(op,ap,aspectList);
     				}
     				else {
     					IndexedWord secondNextNode = textParser.getNodeByIndex(tokenIndex+2);
-    					if( NLPRule.isNoun(secondNextNode.tag()) ) {
+    					if( NLPRule.isNoun(secondNextNode) ) {
     						Aspect ap = new Aspect(secondNextNode,reasonForSelection);
-    						extendAspectAndAddToList(ap,op,aspectList);
+    						extendAspectAndAddToList(op,ap,aspectList);
     					}
     				}
     			}
     		}
     		
     		//讨论补语：
+    		// 提取补语从句的主语：
+    		//e.g. i {love}-[OPINION] how slim the {design}-[ASPECT] is 
     		IndexedWord ccomp = null;
     		Set<IndexedWord> childSet = graph.getChildren(verb);
     		for(IndexedWord child:childSet) {
@@ -614,50 +640,51 @@ public class TextExtractor {
     			if( isLegalSubj(ccompSubj) ) {
     				reasonForSelection = "[R-21] verb_opinion 补语从句的主语";
     	    		Aspect ap = new Aspect(ccompSubj,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
+    				extendAspectAndAddToList(op,ap,aspectList);
     			}
     		}
     	}
     }
-    
-    private void extractForNounOpinion(Opinion op,ArrayList<Aspect> aspectList) {
+	
+	protected void extractForNounOpinion(Opinion op,ArrayList<Aspect> aspectList) {
     	IndexedWord noun = op.getCoreOpinionNode();
     	SemanticGraph graph = textParser.getGraphByNode(noun);
 //    	System.out.println("Dependency Graph:\n " +graph.toString(SemanticGraph.OutputFormat.READABLE));
     	
-    	//查找opinion的修饰对象：
+    	//讨论修饰对象：
     	String reasonForSelection = "";
     	Set<IndexedWord> nounGovSet = graph.getParents(noun);
-    	//case 1: 查找其祖先关系中的修饰对象,e.g." a premium laptop"
+    	//case 1: 查找其祖先关系中的修饰对象
+    	//e.g." a {premium}-[OPINION] {laptop}-[ASPECT]"
     	for(IndexedWord gov:nounGovSet) {
     		String reln = gov!=null ? graph.getEdge(gov,noun).getRelation().toString() : "";
-        	if( reln.equals("compound") && NLPRule.isNoun(gov) ) {
+        	if( NLPRule.isCompoundReln(reln) && NLPRule.isNoun(gov) ) {
         		reasonForSelection = "[R-22] noun_opinion 的修饰对象(祖先)";
     			Aspect ap = new Aspect(gov,reasonForSelection,0);
-    			extendAspectAndAddToList(ap,op,aspectList);
+    			extendAspectAndAddToList(op,ap,aspectList);
     		}
     	}
-		//case 2: 查找其子代关系中的修饰对象,
-    	//case 2.1: nmod:of    e.g."disadvantage of amazon seller "
-    	//case 2.2: compound    e.g."i am a big chromebook enthusiast"
+		//查找其子代关系中的修饰对象:
+    	//case 2: nmod    e.g."{disadvantage}-[OPINION] of {amazon seller}-[ASPECT] "
+    	//case 3: compound    e.g."i am a big {chromebook}-[ASPECT] {enthusiast}-[OPINION]"
     	Set<IndexedWord> childSet = graph.getChildren(noun);
 		for(IndexedWord child:childSet) {
 			String reln = graph.getEdge(noun,child).getRelation().getShortName();
 			if( reln.equals("nmod") && isLegalByTag(child) ) {
 				reasonForSelection = "[R-24] noun_opinion 的修饰对象(孩子-nmod)";
 				Aspect ap = new Aspect(child,reasonForSelection,0);
-				extendAspectAndAddToList(ap,op,aspectList);
+				extendAspectAndAddToList(op,ap,aspectList);
 			}
-			else if( reln.equals("compound") && NLPRule.isNoun(child) ) {
+			else if( NLPRule.isCompoundReln(reln) && NLPRule.isNoun(child) ) {
 				reasonForSelection = "[R-23] noun_opinion 的修饰对象(孩子-compound)";
 				Aspect ap = new Aspect(child,reasonForSelection,0);
-				extendAspectAndAddToList(ap,op,aspectList);
+				extendAspectAndAddToList(op,ap,aspectList);
 	    	}
 		}
 		
-		//查找宾语：
-		//case-1:通过使役结构查找宾语	e.g. "makes this machine such a fun"
-		Set<IndexedWord> predGovSet = new HashSet<IndexedWord>();
+		//讨论宾语：
+		//case-1:通过使役结构查找宾语	
+		// e.g. "makes this {machine}-[ASPECT] such a {fun}-[OPINION]"
 		for(IndexedWord gov:nounGovSet) {
     		String reln = gov!=null ? graph.getEdge(gov,noun).getRelation().toString() : "";
         	if( NLPRule.isLegalObjReln(reln) && NLPRule.isVerbCollocateWthAdvcl(gov) ) {
@@ -667,29 +694,29 @@ public class TextExtractor {
     			for(IndexedWord objNode:setFiltered) {
     				if( objNode.index()!=noun.index() ) {
     					Aspect ap = new Aspect(objNode,reasonForSelection);
-        				extendAspectAndAddToList(ap,op,aspectList);
+        				extendAspectAndAddToList(op,ap,aspectList);
     				}
     			}
         	}
         }
-		
 		//根据主语讨论宾语：
 		IndexedWord nearestSubj = NLPRule.getNearestSubj(noun,graph);
     	if( nearestSubj==null || peopleWordList.isPeopleNode(nearestSubj) ) {
-    		//case-2:直接宾语	e.g. "so kudos to acer for the keyboard !"
+    		//case-2:直接宾语	
+    		//e.g. "so {kudos}-[OPINION] to {acer}-[ASPECT] for the keyboard !"
     		Set<IndexedWord> objNodeSet = NLPRule.getImmediateObj(noun,graph);
     		if( objNodeSet.size()!=0 ) {
     			Set<IndexedWord> setFiltered = filterObjNodeSet(graph,noun,objNodeSet);
     			reasonForSelection = "[R-26] noun_opinion 的宾语(直接)";
     			for(IndexedWord objNode:setFiltered) {
     				Aspect ap = new Aspect(objNode,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
+    				extendAspectAndAddToList(op,ap,aspectList);
     			}
     		}
     	}
 	}
-    
-    private void extractForAdvOpinion(Opinion op,ArrayList<Aspect> aspectList) {
+	
+	protected void extractForAdvOpinion(Opinion op,ArrayList<Aspect> aspectList) {
     	IndexedWord adv = op.getCoreOpinionNode();
     	SemanticGraph graph = textParser.getGraphByNode(adv);
 //    	System.out.println("Dependency Graph:\n " +graph.toString(SemanticGraph.OutputFormat.READABLE));
@@ -710,48 +737,53 @@ public class TextExtractor {
     		boolean havePartitionInBetween = textParser.havePartitionInBetween(depObj,adv);
 			boolean reasonableLocaDistribution = !havePartitionInBetween && (depObj.index()<adv.index() || depObj.index()-adv.index()==1);
 			boolean isInReasonableLoca = !OPT.isSuppByLocaDistribution || reasonableLocaDistribution;
-			if( isInReasonableLoca && NLPRule.isNoun(depObj.tag()) ) {
+			//case 1.1：祖先中的名词修饰对象(dep)
+			//e.g. {fast}-[OPINION] {processor}-[ASPECT] .
+			if( isInReasonableLoca && NLPRule.isNoun(depObj) ) {
 				String reasonForSelection = "[R-27] adv_opinion 的修饰对象(祖先-dep)";
 				Aspect ap = new Aspect(depObj,reasonForSelection,0);
-				extendAspectAndAddToList(ap,op,aspectList);
+				extendAspectAndAddToList(op,ap,aspectList);
 			}
     	}
     	for(IndexedWord advmodObj:advmodObjSet) {
     		boolean havePartitionInBetween = textParser.havePartitionInBetween(advmodObj,adv);
 			boolean reasonableLocaDistribution = !havePartitionInBetween && (advmodObj.index()<adv.index() || advmodObj.index()-adv.index()==1);
 			boolean isInReasonableLoca = !OPT.isSuppByLocaDistribution || reasonableLocaDistribution;
+			//case 1.2：祖先中的名词修饰对象(mod)
+			//e.g. not that this machine {boots}-[ASPECT] up {slow}-[OPINION] .
 			if( isInReasonableLoca && NLPRule.isNoun(advmodObj) ) {
 				String reasonForSelection = "[R-27] adv_opinion 的修饰对象(祖先-mod)";
 				Aspect ap = new Aspect(advmodObj,reasonForSelection,0);
-				extendAspectAndAddToList(ap,op,aspectList);
+				extendAspectAndAddToList(op,ap,aspectList);
 			}
-			else if( NLPRule.isAdv(advmodObj) || NLPRule.isAdj(advmodObj) || NLPRule.isVerb(advmodObj) ){
+			//case 2：动词修饰对像
+			//e.g. {navigates}-[ASPECT] {well}-[OPINION] .
+			if( NLPRule.isVerb(advmodObj) ) {
+    			String reasonForSelection = "[R-28] adv_opinion 的修饰对象(动词)";
+    			Aspect ap = new Aspect(advmodObj,reasonForSelection,2);
+    			extendAspectAndAddToList(op,ap,aspectList);
+    		}
+			//case 3：间接修饰对象
+			//e.g. a {cheap}-[OPINION] , decently rugged , light weight {notebook}-[ASPECT]
+			if( NLPRule.isAdv(advmodObj) || NLPRule.isAdj(advmodObj) || NLPRule.isVerb(advmodObj) ){
 				for(IndexedWord gov:graph.getParents(advmodObj)) {
 					String reln = graph.getEdge(gov,advmodObj).getRelation().toString();
 					if( NLPRule.isModReln(reln) && NLPRule.isNoun(gov) ) {
-						String reasonForSelection = "[R-29] adv_opinion 的修饰对象(间接修饰对象)";
+						String reasonForSelection = "[R-29] adv_opinion 的间接修饰对象";
 						Aspect ap = new Aspect(gov,reasonForSelection,0);
 						if( gov.index()>advmodObj.index() && gov.index()>adv.index() ) {
 							int leftMostBoundary = advmodObj.index()+1;
 							ap.setLeftMostBoundary(leftMostBoundary);
 						}
-						extendAspectAndAddToList(ap,op,aspectList);
+						extendAspectAndAddToList(op,ap,aspectList);
 					}
 				}
 			}
     	}
-    	
-    	//讨论谓语：
-    	for(IndexedWord advmodObj:advmodObjSet) {
-    		if( NLPRule.isVerb(advmodObj) ) {
-    			String reasonForSelection = "[R-28] adv_opinion 的修饰对象(动词)";
-    			Aspect ap = new Aspect(advmodObj,reasonForSelection,2);
-    			extendAspectAndAddToList(ap,op,aspectList);
-    		}
-    	}
 		
     	//讨论宾语：
-		//通过使役结构，寻找宾语：e.g. "hdd makes this laptop very slow ."
+		//case 1:通过使役结构，寻找宾语：
+    	//e.g. "hdd makes this {laptop}-[ASPECT] very {slow}-[OPINION] ."
     	for(IndexedWord advmodObj:advmodObjSet) {
     		if( NLPRule.isVerbCollocateWthAdvcl(advmodObj) ) {
     			Set<IndexedWord> objNodeSet = NLPRule.getImmediateDirectObj(advmodObj,graph);
@@ -759,11 +791,12 @@ public class TextExtractor {
     			String reasonForSelection = "[R-30] adv_opinion 的宾语(通过使役结构取得)";
     			for(IndexedWord objNode:setFiltered) {
     				Aspect ap = new Aspect(objNode,reasonForSelection);
-    				extendAspectAndAddToList(ap,op,aspectList);
+    				extendAspectAndAddToList(op,ap,aspectList);
     			}
     		}
     	}
-    	//根据主语讨论宾语：
+    	//case 2:提取修饰动词的宾语：
+    	//e.g. i {rarely}-[OPINION] use the {keyboard}-[ASPECT] .
     	IndexedWord nearestSubj = NLPRule.getNearestSubj(adv,graph);
     	if( nearestSubj!=null && peopleWordList.isPeopleNode(nearestSubj) ) {
     		for(IndexedWord advmodObj:advmodObjSet) {
@@ -773,39 +806,50 @@ public class TextExtractor {
 					Set<IndexedWord> setFiltered = filterObjNodeSet(graph,advmodObj,objNodeSet);
 					for(IndexedWord objNode:setFiltered) {
 						Aspect ap = new Aspect(objNode,reasonForSelection,1);
-	    				extendAspectAndAddToList(ap,op,aspectList);
+	    				extendAspectAndAddToList(op,ap,aspectList);
 					}	
 				}
 			}
     	}
     }
-    
-    private void extractForOtherOpinion(Opinion op,ArrayList<Aspect> aspectList) {
+	
+	protected void extractForOtherOpinion(Opinion op,ArrayList<Aspect> aspectList) {
     	IndexedWord node = op.getCoreOpinionNode();
     	SemanticGraph graph = textParser.getGraphByNode(node);
 //    	System.out.println("Dependency Graph:\n " +graph.toString(SemanticGraph.OutputFormat.READABLE));
+    	// e.g. {like}-[OPINION] the {flip}-[ASPECT] , this has good build quality .
     	Set<IndexedWord> govSet = graph.getParents(node);
     	for(IndexedWord gov:govSet) {
     		if( isLegalByTag(gov) ) {
     			String reasonForSelection = "[R-32] other_opinion 的修饰对象";
     			Aspect ap = new Aspect(gov,reasonForSelection,0);
-    			extendAspectAndAddToList(ap,op,aspectList);
+    			extendAspectAndAddToList(op,ap,aspectList);
     		}
     	}
     }
+	
+	protected boolean isLegalByTag(IndexedWord node) {
+    	return node!=null && (NLPRule.isNoun(node) || NLPRule.isNumber(node) || NLPRule.isDeterminer(node) || NLPRule.isPronoun(node));
+    }
     
-    private Set<IndexedWord> filterObjNodeSet(SemanticGraph graph,IndexedWord gov,Set<IndexedWord> objNodeSet) {
+    protected boolean isLegalObject(IndexedWord node) {
+    	return isLegalByTag(node) && !timeWordList.isTimeNode(node);
+    }
+    
+    protected boolean isLegalSubj(IndexedWord node) {
+    	return isLegalByTag(node) && !peopleWordList.isPeopleNode(node);
+    }
+	
+	protected Set<IndexedWord> filterObjNodeSet(SemanticGraph graph,IndexedWord gov,Set<IndexedWord> objNodeSet) {
     	Set<IndexedWord> setFiltered = new HashSet<IndexedWord>();
     	for(IndexedWord objNode:objNodeSet) {
     		boolean reasonableLocaDistribution = objNode.index()>gov.index(); //合理的位置：若宾语在附属结构后
     		boolean isInReasonableLoca = !OPT.isSuppByLocaDistribution || reasonableLocaDistribution;
     		if( isInReasonableLoca ) {
     			if( peopleWordList.isPeopleNode(objNode) ) {
-    				String spec = graph.getEdge(gov, objNode).getRelation().getSpecific();
-    				if( spec!=null && (spec.equals("to") || spec.equals("for") || spec.equals("as")) ) {
-    					continue;
+    				if( NLPRule.isAppropriateRelnToPeopleObject( graph.getEdge(gov, objNode).getRelation() ) ) {
+    					setFiltered.add(objNode);
     				}
-    				setFiltered.add(objNode);
     			}
         		else if( isLegalObject(objNode) ) {
     				setFiltered.add(objNode);
@@ -815,64 +859,22 @@ public class TextExtractor {
     	return setFiltered;
     }
     
-    private boolean isLegalByTag(IndexedWord node) {
-    	if( node==null ) {
-    		return false;
-    	}
-    	else if( NLPRule.isNoun(node.tag()) ) {
-    		return true;
-    	}
-    	else if( node.tag().equals("CD") ) {
-    		return true;
-    	}
-    	else if( node.tag().indexOf("DT")!=-1 ){
-    		return true;
-    	}
-    	else if( node.tag().indexOf("PRP")!=-1 ){
-    		return true;
-    	}
-    	return false;
-    }
-    
-    private boolean isLegalObject(IndexedWord node) {
-    	boolean isLegalByTag = isLegalByTag(node);
-    	if( !isLegalByTag ) {
-    		return false;
-    	}
-    	boolean isTimeNode = timeWordList.isTimeNode(node);
-    	return !isTimeNode;
-    }
-    
-    private boolean isLegalSubj(IndexedWord node) {
-    	boolean isLegalByTag = isLegalByTag(node);
-    	if( !isLegalByTag ) {
-    		return false;
-    	}
-    	boolean isPeople = peopleWordList.isPeopleNode(node);
-    	return !isPeople;
-    }
-    
-    private void extendAspectAndAddToList(Aspect ap,Opinion op,ArrayList<Aspect> aspectList) {
+    protected void extendAspectAndAddToList(Opinion op,Aspect ap,ArrayList<Aspect> aspectList) {
     	if( ap==null || ap.getAspectNodeListSize()==0 ) {
     		return;
     	}
     	boolean isCoreNodeInOpinion = isCoreNodeInOpinion(ap,op);
-    	if( isCoreNodeInOpinion ) {
-    		return;
-    	}
-    	boolean isPureFunctionAspect = isPureFunctionAspect(ap);
-    	if( isPureFunctionAspect ) {
+    	if( !op.isPotentialAspect() && isCoreNodeInOpinion ) {
     		return;
     	}
     	IndexedWord node = ap.getCoreAspectNode();
-    	String tag = node.tag();
-    	if( tag.indexOf("PRP")!=-1 || NLPRule.isCorefDT(node) ) {
+    	if( NLPRule.isPronoun(node) || NLPRule.isCorefDT(node) ) {
     		checkCoref(op,ap,aspectList);
     	}
-    	else if( NLPRule.isVerb(tag) ) {
+    	else if( NLPRule.isVerb(node) ) {
     		extendVerbCoreAspect(op,ap,aspectList);
     	}
-    	else if( NLPRule.isNoun(tag) || tag.equals("CD") || tag.equals("DT") ) {
+    	else if( NLPRule.isNoun(node) || NLPRule.isNumber(node) || NLPRule.isDeterminer(node) ) {
     		extendNounCoreAspect(op,ap,aspectList);
     	}
     	else {
@@ -884,40 +886,6 @@ public class TextExtractor {
     	IndexedWord coreNode = ap.getCoreAspectNode();
     	boolean isTermInOpinion = op.isNodeInOpinion(coreNode);
     	return isTermInOpinion;
-    }
-    
-    private boolean isPureFunctionAspect(Aspect ap) {
-    	IndexedWord functionCore = ap.getCoreAspectNode();
-    	boolean coreApIsFunctionWord = vagueWordList.isVagueNode(functionCore);
-    	if( !coreApIsFunctionWord ) {
-    		return false;
-    	}
-    	SemanticGraph graph = textParser.getGraphByNode(functionCore);
-    	Set<IndexedWord> childSet = graph.getChildren(functionCore);
-    	Set<IndexedWord> modNodeSet = new HashSet<IndexedWord>();
-		for(IndexedWord child:childSet) {
-			String reln = graph.getEdge(functionCore,child).getRelation().toString();
-			if( reln.indexOf("nmod")!=-1 ) {
-				modNodeSet.add(child);
-			}
-			else if( NLPRule.isLegalObjReln(reln) ) {
-				modNodeSet.add(child);
-			}
-			else if( reln.equals("compound") ) {
-				modNodeSet.add(child);
-			}
-			else if( reln.equals("appos") ) {
-				modNodeSet.add(child);
-			}
-		}
-		boolean isPureFunction = true;
-		// 若虚词有与之相连接的实词
-		for(IndexedWord modNode:modNodeSet) {
-			if( !vagueWordList.isVagueNode(modNode) ) {
-				isPureFunction = false;
-			}
-		}
-		return isPureFunction;
     }
     
     private void checkCoref(Opinion op,Aspect ap,ArrayList<Aspect> aspectList){
@@ -1019,42 +987,44 @@ public class TextExtractor {
 		}
     }
     
+    private ArrayList<IndexedWord> extendBySemanticCompound(Aspect ap){
+    	IndexedWord core = ap.getCoreAspectNode();
+    	SemanticGraph graph = textParser.getGraphByNode(core);
+    	ArrayList<IndexedWord> chunk = new ArrayList<IndexedWord>();
+    	ArrayList<IndexedWord> compoundNodeList = NLPRule.getAllCompoundNode(core,graph);
+		if( compoundNodeList.size()!=0 ) {
+			int nounCoreTokenIndex = textParser.getNodeIndexByNode(core);
+			int startTokenIndex = nounCoreTokenIndex;
+			int endTokenIndex = nounCoreTokenIndex;
+			for(IndexedWord compoundNode:compoundNodeList) {
+				int modObjectTokenIndex = textParser.getNodeIndexByNode(compoundNode);
+				startTokenIndex = Math.min(startTokenIndex, modObjectTokenIndex);
+				endTokenIndex = Math.max(endTokenIndex, modObjectTokenIndex);
+			}
+			for(int i=startTokenIndex;i<=endTokenIndex;i++) {
+				IndexedWord node = textParser.getNodeByIndex(i);
+				chunk.add(node);
+			}
+		}
+    	return chunk;
+    }
+    
     private ArrayList<IndexedWord> extendNounByConstituency(Opinion op,Aspect ap){
-    	IndexedWord opCore = op.getCoreOpinionNode();
     	IndexedWord apCore = ap.getCoreAspectNode();
     	SemanticGraph graph = textParser.getGraphByNode(apCore);
     	ArrayList<IndexedWord> chunk = new ArrayList<IndexedWord>();
     	Tree root = textParser.getTreeByNode(apCore);
     	Tree apCoreLeaf = textParser.getTreeLeafByNode(apCore);
     	Tree expansionNode = NLPRule.getMaxNounTree(root, apCoreLeaf);
-    	//范围优化(1)
-//    	Tree opCoreLeaf = textParser.getTreeLeafByNode(opCore);
-//    	Tree expansionNode = NLPRule.getMaxNounTreeUnderLCA(root, apCoreLeaf, opCoreLeaf);
 		if( expansionNode!=null ) {
 			List<Tree> leafList = expansionNode.getLeaves();
 			Tree startNode = leafList.get(0);
     		Tree endNode = leafList.get(leafList.size()-1);
     		int startIndex = textParser.getTreeNodeIndex(startNode);
     		int endIndex =  textParser.getTreeNodeIndex(endNode);
-    		boolean coreNodeIsIn = false;
     		for(int i=startIndex;i<=endIndex;i++) {
     			IndexedWord node = graph.getNodeByIndex(i);
-    			Tree tree = textParser.getTreeLeafByNode(node);
-    			boolean isNodeInADVP = NLPRule.isNodeInADVP(tree,expansionNode);
-    			boolean isNodeInADJP = NLPRule.isNodeInADJP(tree,expansionNode);
-    			//范围优化(2)
-//    			boolean isNodeInSBAR = NLPRule.isNodeInSBAR(tree,expansionNode);
-//    			boolean isNodeInPRN = NLPRule.isNodeInPRN(tree,expansionNode);
-//    			if( coreNodeIsIn && (isNodeInSBAR || isNodeInPRN) ) {
-//    				break;
-//    			}
-//    			if( node.beginPosition()==apCore.beginPosition() ) {
-//    				coreNodeIsIn = true;
-//    			}
     			if( isLegalByTag(node) ) {
-    				chunk.add(node);
-    			}
-    			else if( !isNodeInADVP && !isNodeInADJP ) {
     				chunk.add(node);
     			}
     		}
@@ -1107,28 +1077,6 @@ public class TextExtractor {
 		return chunk;
     }
     
-    private ArrayList<IndexedWord> extendBySemanticCompound(Aspect ap){
-    	IndexedWord core = ap.getCoreAspectNode();
-    	SemanticGraph graph = textParser.getGraphByNode(core);
-    	ArrayList<IndexedWord> chunk = new ArrayList<IndexedWord>();
-    	ArrayList<IndexedWord> compoundNodeList = NLPRule.getAllCompoundNode(core,graph);
-		if( compoundNodeList.size()!=0 ) {
-			int nounCoreTokenIndex = textParser.getNodeIndexByNode(core);
-			int startTokenIndex = nounCoreTokenIndex;
-			int endTokenIndex = nounCoreTokenIndex;
-			for(IndexedWord compoundNode:compoundNodeList) {
-				int modObjectTokenIndex = textParser.getNodeIndexByNode(compoundNode);
-				startTokenIndex = Math.min(startTokenIndex, modObjectTokenIndex);
-				endTokenIndex = Math.max(endTokenIndex, modObjectTokenIndex);
-			}
-			for(int i=startTokenIndex;i<=endTokenIndex;i++) {
-				IndexedWord node = textParser.getNodeByIndex(i);
-				chunk.add(node);
-			}
-		}
-    	return chunk;
-    }
-    
     private ArrayList<IndexedWord> mergeOrderly(ArrayList<IndexedWord> arr1,ArrayList<IndexedWord> arr2){
     	ArrayList<IndexedWord> mergered = new ArrayList<IndexedWord>();
     	int m = 0;//arr1的索引
@@ -1165,8 +1113,11 @@ public class TextExtractor {
     	if( ap==null || ap.getAspectNodeListSize()==0 ) {
     		return;
     	}
-    	//设置隐式 aspect：
-    	setImplicitAspect(ap);
+    	//查看显隐性
+    	boolean isImplicitWord = isImplicitWord(ap);
+    	if( isImplicitWord ) {
+    		return;
+    	}
     	//再无重复加入：
     	boolean isContain = false;
     	for(int i=0;i<aspectList.size();i++) {
@@ -1201,7 +1152,7 @@ public class TextExtractor {
     	//修剪一：根据和opinion的相对位置进行修剪：
     	int startIndex = apNodeList.get(0).index();
 		int endIndex =  apNodeList.get(apNodeList.size()-1).index();
-		if( opinionStartNode!=null && opinionEndNode!=null) {
+		if( !op.isPotentialAspect() && opinionStartNode!=null && opinionEndNode!=null) {
 			int startMax = Math.max(startIndex, opinionStartNode.index());
 			int endMin = Math.min(endIndex,opinionEndNode.index());
 			// opinion 和 aspect 当前范围有交集
@@ -1244,24 +1195,16 @@ public class TextExtractor {
     		IndexedWord node = trimedApNodeList.get(i);
     		String tag = node.tag();
     		String ner = node.ner();
-    		if( tag.indexOf("PRP")!=-1 || tag.indexOf("DT")!=-1 || tag.equals("IN") || tag.equals("CC") || tag.startsWith("W") 
-    			|| tag.equals("TO") || tag.equals(".") || tag.equals("HYPH") || tag.equals(",") ) {
+    		//coreExtendType=0,1,2 时均起作用的修剪（通用的修剪）：
+    		if( NLPRule.isPronoun(node) || NLPRule.isDeterminer(node) ) {
     			trimedApNodeList.remove(node);
     			i--;
     		}
-    		else if( ner.equals("ORDINAL") ) {
-    			trimedApNodeList.remove(node);
-    			i--;
-    		}
-    		else if( !NLPRule.isVerb(apCoreNode) && NLPRule.isAdv(node) ) {
-    			trimedApNodeList.remove(node);
-    			i--;
-    		}
-    		else if( timeWordList.isTimeNode(node) ) {
-    			trimedApNodeList.remove(node);
-    			i--;
-    		}
-    		else if( vagueWordList.isVagueNode(node) ) {
+    		//coreExtendType=1,2 时起作用的修剪：
+    		else if( NLPRule.isPunctuation(node) || tag.equals("IN") || tag.equals("CC") || tag.startsWith("W") || tag.equals("TO") 
+    				|| ( ner!=null && ner.equals("ORDINAL") )
+    				|| ( !NLPRule.isVerb(apCoreNode) && NLPRule.isAdv(node) )
+    				|| timeWordList.isTimeNode(node) ) {
     			trimedApNodeList.remove(node);
     			i--;
     		}
@@ -1269,14 +1212,9 @@ public class TextExtractor {
 		ap.setAspectNodeList(trimedApNodeList);
     }
     
-    private void setImplicitAspect(Aspect ap) {
-    	ArrayList<IndexedWord> aspectNodeList = ap.getAspectNodeList();
-    	if( aspectNodeList.size()==1 ) {
-    		IndexedWord node = aspectNodeList.get(0);
-    		if( implicitAspectWordList.isWordInImplicitAspectWordSet(node.lemma().toLowerCase()) ) {
-    			ap.setImplicitAspect(true);
-    		}
-    	}
+    private boolean isImplicitWord(Aspect ap) {
+    	IndexedWord soleNode = ap.getAspectNodeList().size() == 1 ? ap.getAspectNodeList().get(0) : null;
+    	return implicitAspectWordList.isImplicitNode(soleNode);
     }
-  	
+    
 }

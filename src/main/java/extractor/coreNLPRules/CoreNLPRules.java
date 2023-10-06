@@ -1,8 +1,9 @@
-package extractor;
+package extractor.coreNLPRules;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -15,47 +16,45 @@ import edu.stanford.nlp.semgraph.SemanticGraph;
 import edu.stanford.nlp.trees.GrammaticalRelation;
 import edu.stanford.nlp.trees.Tree;
 
-public class CoreNLPRules {
+public abstract class CoreNLPRules {
 	
-	public String simplifyTag(String tag) {
-		if(tag.length()>2) {
-			tag=tag.substring(0,2);
-		}
-		return tag;
+	//词性分析相关内容：
+	public abstract boolean isCopulaNode(IndexedWord node);
+	public abstract boolean isRightParenthesis(String word);
+	public abstract boolean isLeftParenthesis(String word);
+	public abstract boolean isPunctuation(IndexedWord node);
+	
+	public abstract boolean isAdv(String tag);
+	public abstract boolean isAdj(String tag);
+	public abstract boolean isVerb(String tag);
+	public abstract boolean isNoun(String tag);
+	public abstract boolean isPronoun(String tag);
+	public abstract boolean isDeterminer(String tag);
+	
+	public boolean isNumber(String tag) {
+		return tag.equals("CD");
 	}
-	
-	public boolean isAdv(String tag) {
-		return simplifyTag(tag).equals("RB");
-	}
-	
 	public boolean isAdv(IndexedWord node) {
 		return isAdv(node.tag());
 	}
-    
-    public boolean isAdj(String tag) {
-    	return simplifyTag(tag).equals("JJ");
-	}
-    
     public boolean isAdj(IndexedWord node) {
 		return isAdj(node.tag());
 	}
-    
-    public boolean isVerb(String tag) {
-		return simplifyTag(tag).equals("VB");
-	}
-    
     public boolean isVerb(IndexedWord node) {
 		return isVerb(node.tag());
 	}
-    
-    public boolean isNoun(String tag) {
-		return simplifyTag(tag).equals("NN");
-	}
-    
     public boolean isNoun(IndexedWord node) {
 		return isNoun(node.tag());
 	}
-    
+    public boolean isPronoun(IndexedWord node) {
+		return isPronoun(node.tag());
+	}
+    public boolean isDeterminer(IndexedWord node) {
+		return isDeterminer(node.tag());
+	}
+    public boolean isNumber(IndexedWord node) {
+		return isNumber(node.tag());
+	}
     public boolean isHave(String word,String[] arr) {
 		for(int i=0;i<arr.length;i++) {
 			if(word.equals(arr[i])) {
@@ -64,16 +63,14 @@ public class CoreNLPRules {
 		}
 	    return false;
     }
-    
-    private String[] verbCollocateWthAdvcl = {"make","find"};
-	public boolean isVerbCollocateWthAdvcl(IndexedWord node) {
-		return isHave(node.lemma(),verbCollocateWthAdvcl);
-	}
 	
-	private String[] corefDT = {"this","that","those","these"};
-	public boolean isCorefDT(IndexedWord node) {
-		return isHave(node.lemma(),corefDT);
-	}
+	
+	//句法依存分析相关内容：
+	public abstract boolean isVerbCollocateWthAdvcl(IndexedWord node);
+	
+	public abstract boolean isCorefDT(IndexedWord node);
+	
+	public abstract boolean isAppropriateRelnToPeopleObject(GrammaticalRelation reln);
 	
 	public boolean isModReln(String reln) {
 		String relnSimplified = reln;
@@ -84,9 +81,46 @@ public class CoreNLPRules {
 		return relnSimplified.indexOf("mod")!=-1;
 	}
 	
-	//查找最近的主语
-	//left：subj
-	//right：gov of subj
+	public boolean isInDescendants(SemanticGraph graph,IndexedWord gov,IndexedWord dep) {
+    	if( gov==null ) {
+    		return false;
+    	}
+    	// 若 gov 和 dep 为一个节点，会返回这个节点本身：
+    	List<IndexedWord> nodeInPath = graph.getShortestDirectedPathNodes(gov,dep);
+    	if( nodeInPath==null || nodeInPath.size()==0 ) {
+    		return false;
+    	}
+    	return true;
+    }
+	
+	public boolean isInACL(SemanticGraph graph,IndexedWord gov,IndexedWord dep) {
+    	if( gov==null ) {
+    		return false;
+    	}
+    	// 若 gov 和 dep 为一个节点，会返回这个节点本身：
+    	List<IndexedWord> nodeInPath = graph.getShortestDirectedPathNodes(gov,dep);
+    	if( nodeInPath==null || nodeInPath.size()==0 ) {
+    		return false;
+    	}
+    	for(int i=0;i<nodeInPath.size()-1;i++) {
+    		IndexedWord govv = nodeInPath.get(i);
+    		IndexedWord depp = nodeInPath.get(i+1);
+    		String reln = graph.getEdge(govv, depp).getRelation().toString();
+    		if( reln.startsWith("acl") ) {
+    			return false;
+    		}
+    	}
+    	return true;
+    }
+	
+	//主语部分：
+	/**
+	 * 查找距离节点node最近的主语
+	 *
+	 * @param node 需要查找主语的节点
+	 * @param graph node所在的SemanticGraph
+	 * @return ImmutablePair.of(subj,nodeToRoot) subj:找到的主语，nodeToRoot:主语在图中的父节点
+	 */
 	public Pair<IndexedWord,IndexedWord> getNearestSubjGovPair(IndexedWord node,SemanticGraph graph) {
   		ArrayList<IndexedWord> nodeListToRoot = new ArrayList<IndexedWord>();
   		nodeListToRoot.add(node);
@@ -120,7 +154,9 @@ public class CoreNLPRules {
 		return subjGovPair.getLeft();
   	}
 	
-	//找到直接的主语
+	/**
+	 * 查找节点node的直接主语
+	 */
   	public IndexedWord getImmediateSubj(IndexedWord node,SemanticGraph graph) {
   		ArrayList<IndexedWord> subjList = new ArrayList<IndexedWord>();
   		Set<IndexedWord> childSet = graph.getChildren(node);
@@ -138,7 +174,9 @@ public class CoreNLPRules {
 		}
   	}
   	
-    //从同一深度的 ArrayList 中找到合适的 subj
+    /**
+	 * 从同一深度的 ArrayList 中找到合适的 subj
+	 */
   	public IndexedWord selectFromSameLevelSubj(IndexedWord node, ArrayList<IndexedWord> subjList) {
   		IndexedWord subj = null;
   		if( subjList.size()==1 ) {
@@ -149,7 +187,7 @@ public class CoreNLPRules {
 			IndexedWord nearestPRPSubj = null;
 			for(int j=0;j<subjList.size();j++) {
 				IndexedWord candidateSubj = subjList.get(j);
-				if( candidateSubj.tag().equals("PRP") ) {
+				if( isPronoun(candidateSubj) ) {
 					if( nearestPRPSubj==null ) {
 						nearestPRPSubj = candidateSubj;
 					}else if( getDistanceBetweenNodes(nearestPRPSubj,node)>getDistanceBetweenNodes(candidateSubj,node) ){
@@ -181,10 +219,21 @@ public class CoreNLPRules {
   		return reln.indexOf("subj")!=-1;
   	}
   	
+  	//宾语部分：
+    //是否是直接宾语关系
+  	public abstract boolean isDirectObjReln(String reln);
+    //是否是合规的间接宾语关系
+  	public abstract boolean isLegalInDirectObjReln(String reln);	
+    //是否为合理的宾语关系(直接间接皆可)
+  	public boolean isLegalObjReln(String reln) {
+  		boolean isDirectObjReln = isDirectObjReln(reln);
+  		boolean isLegalInDirectObjReln = isLegalInDirectObjReln(reln);
+  		return isDirectObjReln || isLegalInDirectObjReln;
+  	}	
     //找到最近的宾语
   	public Set<IndexedWord> getNearestObj(IndexedWord node,SemanticGraph graph) {
   		Set<IndexedWord> nearestObjSet = new HashSet<IndexedWord>();
-  		Queue queue = new LinkedList<IndexedWord>(); 
+  		Queue<IndexedWord> queue = new LinkedList<IndexedWord>(); 
         queue.add(node);
         boolean hasFound = false;
         while(!queue.isEmpty()) {
@@ -203,21 +252,7 @@ public class CoreNLPRules {
         	}
         }
   		return nearestObjSet;
-  	}
-  	
-    //找到直系关系中的通过“obl:as”方式连接的宾语
-  	public Set<IndexedWord> getImmediateAsObj(IndexedWord node,SemanticGraph graph) {
-  		Set<IndexedWord> childSet = graph.getChildren(node);
-    	Set<IndexedWord> asObjNodeSet = new HashSet<IndexedWord>();
-		for(IndexedWord child:childSet) {
-			String reln = graph.getEdge(node,child).getRelation().toString();
-			if( reln.equals("obl:as") ) {
-				asObjNodeSet.add(child);
-			}
-		}
-		return asObjNodeSet;
-  	}
-  	
+  	} 	
     //找到直系关系中的所有宾语
   	public Set<IndexedWord> getImmediateObj(IndexedWord node,SemanticGraph graph) {
   		Set<IndexedWord> childSet = graph.getChildren(node);
@@ -229,8 +264,7 @@ public class CoreNLPRules {
 			}
 		}
 		return objNodeSet;
-  	}
-  	
+  	}	
     //找到直系关系中的所有直接宾语
   	public Set<IndexedWord> getImmediateDirectObj(IndexedWord node,SemanticGraph graph) {
   		Set<IndexedWord> childSet = graph.getChildren(node);
@@ -243,102 +277,22 @@ public class CoreNLPRules {
 		}
 		return objNodeSet;
   	}
-  	
-  	//是否是直接宾语关系
-  	public boolean isDirectObjReln(String reln) {
-  		return reln.indexOf("obj")!=-1;
-  	}
-  	
-    //是否是合规的间接宾语关系
-  	public boolean isLegalInDirectObjReln(String reln) {
-  		if( reln.indexOf("obl")!=-1 ) {
-			// "as"是有争议的
-			//if( reln.indexOf("as")!=-1 ) {
-			//	return false;
-			//}
-			if( reln.indexOf("tmod")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("than")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("despite")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("after")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("over")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("npmod")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("within")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("except")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("through")!=-1 ) {
-				return false;
-			}
-			if( reln.indexOf("from")!=-1 ) {
-				return false;
-			}
-			else {
-				return true;
-			}
-		}
-  		return false;
-  	}
-  	
-  	//是否为合理的宾语关系(直接间接皆可)
-  	public boolean isLegalObjReln(String reln) {
-  		boolean isDirectObjReln = isDirectObjReln(reln);
-  		boolean isLegalInDirectObjReln = isLegalInDirectObjReln(reln);
-  		return isDirectObjReln || isLegalInDirectObjReln;
-  	}
-  	
-    //为动词找到直接的宾语
-  	public Set<IndexedWord> getDirectObjForVerb(IndexedWord node,SemanticGraph graph) {
-  		Set<IndexedWord> childSet = graph.getChildren(node);
-    	Set<IndexedWord> objNodeSet = new HashSet<IndexedWord>();
-		for(IndexedWord child:childSet) {
-			String reln = graph.getEdge(node,child).getRelation().toString();
-			if( isLegalObjRelnForVerb(reln) ) {
-				objNodeSet.add(child);
-			}
-		}
-		return objNodeSet;
-  	}
-  	
-    //对于动词来说，是为合理的宾语关系
-  	public boolean isLegalObjRelnForVerb(String reln) {
-  		if( reln.indexOf("obj")!=-1 ) {
-			return true;
-		}else if( reln.indexOf("obl")!=-1 ) {
-			if( reln.indexOf("by")!=-1 ) {
-				return true;
-			}
-		}
-  		return false;
-  	}
-    
+   
     //找到 并列词汇
-	public ArrayList<IndexedWord> getImmediateAndNode(IndexedWord node, SemanticGraph graph) {
+  	public abstract boolean isAndReln(String reln);
+  	public ArrayList<IndexedWord> getImmediateAndNode(IndexedWord node, SemanticGraph graph) {
 		ArrayList<IndexedWord> andNodeSet = new ArrayList<IndexedWord>();
   		Set<IndexedWord> childSet = graph.getChildren(node);
     	for(IndexedWord child:childSet) {
 			String reln = graph.getEdge(node,child).getRelation().toString();
-			if( reln.equals("conj:and") && !andNodeSet.contains(child) ) {
+			if( isAndReln(reln) && !andNodeSet.contains(child) ) {
 				andNodeSet.add(child);
 			}
 		}
     	Set<IndexedWord> govSet = graph.getParents(node);
     	for(IndexedWord gov:govSet) {
 			String reln = graph.getEdge(gov,node).getRelation().toString();
-			if( reln.equals("conj:and") && !andNodeSet.contains(gov) ) {
+			if( isAndReln(reln) && !andNodeSet.contains(gov) ) {
 				andNodeSet.add(gov);
 			}
 		}
@@ -362,19 +316,20 @@ public class CoreNLPRules {
 	}
 	
 	//找到 compound
+	public abstract boolean isCompoundReln(String reln);
 	public ArrayList<IndexedWord> getImmediateCompoundNode(IndexedWord node, SemanticGraph graph) {
 		ArrayList<IndexedWord> compoundNodeList = new ArrayList<IndexedWord>();
   		Set<IndexedWord> childSet = graph.getChildren(node);
     	for(IndexedWord child:childSet) {
 			String reln = graph.getEdge(node,child).getRelation().toString();
-			if( reln.equals("compound") && !compoundNodeList.contains(child) ) {
+			if( isCompoundReln(reln) && !compoundNodeList.contains(child) ) {
 				compoundNodeList.add(child);
 			}
 		}
     	Set<IndexedWord> govSet = graph.getParents(node);
     	for(IndexedWord gov:govSet) {
 			String reln = graph.getEdge(gov,node).getRelation().toString();
-			if( reln.equals("compound") && !compoundNodeList.contains(gov) ) {
+			if( isCompoundReln(reln) && !compoundNodeList.contains(gov) ) {
 				compoundNodeList.add(gov);
 			}
 		}
@@ -398,19 +353,20 @@ public class CoreNLPRules {
 	}
 	
 	//找到 appos
+	public abstract boolean isApposReln(String reln);
 	public ArrayList<IndexedWord> getImmediateApposNode(IndexedWord node, SemanticGraph graph) {
 		ArrayList<IndexedWord> apposNodeSet = new ArrayList<IndexedWord>();
   		Set<IndexedWord> childSet = graph.getChildren(node);
     	for(IndexedWord child:childSet) {
 			String reln = graph.getEdge(node,child).getRelation().toString();
-			if( reln.equals("appos") && !apposNodeSet.contains(child) ) {
+			if( isApposReln(reln) && !apposNodeSet.contains(child) ) {
 				apposNodeSet.add(child);
 			}
 		}
     	Set<IndexedWord> govSet = graph.getParents(node);
     	for(IndexedWord gov:govSet) {
 			String reln = graph.getEdge(gov,node).getRelation().toString();
-			if( reln.equals("appos") && !apposNodeSet.contains(gov) ) {
+			if( isApposReln(reln) && !apposNodeSet.contains(gov) ) {
 				apposNodeSet.add(gov);
 			}
 		}
@@ -433,6 +389,9 @@ public class CoreNLPRules {
         return apposNodeList;
 	}
 	
+	
+	//选区分析相关内容：
+	//从叶节点出发能找到的最小的名词选区：
 	public Tree getNearestNounTree(Tree root,Tree leaf) {
 		//i=0 为自身单词；i=1为词性
 		Tree grandFather = leaf.ancestor(2,root);
@@ -445,6 +404,7 @@ public class CoreNLPRules {
 		}
 	}
 	
+	//从叶节点出发能找到的最大的名词选区：
 	public Tree getMaxNounTree(Tree root,Tree leaf) {
 		Tree maxNounTree = null;
 		int depth = root.depth();
@@ -519,32 +479,28 @@ public class CoreNLPRules {
 			}
 		}
 		return isNodeInCentainPhrase;
-	}
-	
+	}	
 	//是否位于ADVP中
 	public boolean isNodeInADVP(Tree node,Tree root) {
 		String phraseName = "ADVP";
 		return isNodeInCentainPhrase(node,root,phraseName);
 	}
-	
 	//是否位于ADVP中
 	public boolean isNodeInADJP(Tree node,Tree root) {
 		String phraseName = "ADJP";
 		return isNodeInCentainPhrase(node,root,phraseName);
 	}
-	
 	//是否位于从句中
 	public boolean isNodeInSBAR(Tree node,Tree root) {
 		String phraseName = "S";
 		return isNodeInCentainPhrase(node,root,phraseName);
 	}	
-	
 	//是否位于PRN中
 	public boolean isNodeInPRN(Tree node,Tree root) {
 		String phraseName = "PRN";
 		return isNodeInCentainPhrase(node,root,phraseName);
 	}
-	
+		
 	//Tree node 和 IndexedWord node 指代同一个对象
 	public boolean isReferToSame(Tree tree,IndexedWord node) {
 		String treeLabel = tree.label().toString();
