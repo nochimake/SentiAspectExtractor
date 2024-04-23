@@ -121,7 +121,7 @@ public class SentiAspectExtractor {
 			this.outputFileName = FileIOs.getNextAvailableFilename(FileIOs.s_ChopFileNameExtension(this.inputFileName), sResultsFileExtension);
 		}
 		
-		//开始解析aspect
+		//Start parsing aspect
 		init();
 		extractSentiAspect ();
 		
